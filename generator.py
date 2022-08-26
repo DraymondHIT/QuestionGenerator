@@ -3,6 +3,7 @@ from allennlp.predictors.predictor import Predictor
 import allennlp_models.tagging
 from structure import SentenceStructure
 import random
+from collections import Counter
 
 
 class QuestionGenerator:
@@ -31,40 +32,34 @@ class QuestionGenerator:
 
         return filtered
 
-    def is_head_of(self, token1, token2, doc):
-        while token2.head != 0:
-            token2 = list(doc)[token2.head-1]
-            if token1.id == token2.id:
-                return True
-        return False
+    def get_center_word(self, word_doc, subject):
+        tokens = subject.getValue()
+        limit = range(tokens[0].id, tokens[-1].id+1)
+        center_words = []
+        for token in tokens:
+            temp = token
+            while temp.head in limit:
+                temp = list(word_doc)[temp.head-1]
+            center_words.append(temp)
+        counts = Counter(center_words)
+        center_word = counts.most_common(1)[0][0]
+
+        return center_word
 
     def get_wh_word(self, word_doc, token_doc, subject):
-        entities = []
-        for index, token in enumerate(subject.getValue()):
-            if list(token_doc)[token.id-1].ner != "O":
-                entities.append(token)
 
-        if len(entities) == 0:
-            return "What"
-
-        if len(entities) == 1:
-            token = entities[0]
-        elif len(entities) == 2:
-            entity1 = entities[0]
-            entity2 = entities[1]
-            if self.is_head_of(entity1, entity2, word_doc):
-                token = entity1
+        center = self.get_center_word(word_doc, subject)
+        if center.upos in {"NOUN", "PROPN", "NUM"}:
+            if list(token_doc)[center.id - 1].ner.__contains__("PERSON"):
+                return "Who"
+            elif list(token_doc)[center.id - 1].ner.__contains__("DATE"):
+                return "What time"
+            elif list(token_doc)[center.id - 1].ner.__contains__("LOC"):
+                return "What place"
             else:
-                token = entity2
-
-        if list(token_doc)[token.id-1].ner.__contains__("PERSON"):
-            return "Who"
-        elif list(token_doc)[token.id-1].ner.__contains__("DATE"):
-            return "What time"
-        elif list(token_doc)[token.id-1].ner.__contains__("LOC"):
-            return "What place"
+                return "What"
         else:
-            return "What"
+            return "How"
 
     def get_wh_word_in_tmp(self, tmp):
         for token in tmp.getValue():
@@ -117,7 +112,7 @@ class QuestionGenerator:
             print(wh_word + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?")
 
         # 2. object question
-        if not structure.object.isEmpty():
+        if not structure.object.isEmpty() and structure.sconj is None:
             if len(structure.mods) > 0:
                 mod = random.choice(structure.mods)
                 _mod = self.lower_when_QG(token_doc, mod)
@@ -147,6 +142,69 @@ class QuestionGenerator:
             _subject = self.lower_when_QG(token_doc, structure.subject)
             print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
 
+        # 4. LOC question
+        if not structure.loc.isEmpty():
+            wh_word = "Where"
+            _subject = self.lower_when_QG(token_doc, structure.subject)
+            print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
+
+        # 5. PRP(purpose) question
+        if not structure.prp.isEmpty():
+            wh_word = "For what purpose"
+            _subject = self.lower_when_QG(token_doc, structure.subject)
+            print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
+
+        # 6. PRD(secondary predication) question
+        if structure.prd is not None and not structure.prd.object.isEmpty():
+            secondary_verb = structure.prd.verb.lemma()
+            if len(structure.prd.mods) > 0:
+                mod = random.choice(structure.prd.mods)
+                _mod = self.lower_when_QG(token_doc, mod)
+            else:
+                _mod = ""
+            wh_word = self.get_wh_word(structure.doc, token_doc, structure.prd.object)
+            _subject = self.lower_when_QG(token_doc, structure.subject if structure.prd.subject.isEmpty() else structure.prd.subject)
+
+            # if object starts with PREP
+            if structure.prd.object.getStart().upos == "ADP":
+                prep = structure.prd.object.getStart().text.capitalize()
+                wh_word = wh_word.lower()
+                # convert 'who' to 'whom'
+                if wh_word == "who":
+                    wh_word = "whom"
+                print(prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + secondary_verb.__str__() + " " + _mod + "?")
+            else:
+                print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + secondary_verb.__str__() + " " + _mod + "?")
+
+        # 7. SCONJ question
+        if structure.sconj is not None:
+            # incomplete structure
+            # When subject is lacking, real object will be stored as subject in SentenceStructure.
+            if structure.sconj.object.isEmpty():
+                sconj_verb = structure.sconj.verb.lemma()
+                if len(structure.sconj.mods) > 0:
+                    mod = random.choice(structure.sconj.mods)
+                    _mod = self.lower_when_QG(token_doc, mod)
+                else:
+                    _mod = ""
+                wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.subject)
+                _subject = self.lower_when_QG(token_doc, structure.subject)
+
+                # if object starts with PREP
+                if structure.sconj.subject.getStart().upos == "ADP":
+                    prep = structure.sconj.subject.getStart().text.capitalize()
+                    wh_word = wh_word.lower()
+                    # convert 'who' to 'whom'
+                    if wh_word == "who":
+                        wh_word = "whom"
+                    print(prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + sconj_verb.__str__() + " " + _mod + "?")
+                else:
+                    print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + sconj_verb.__str__() + " " + _mod + "?")
+
+            # complete structure
+            else:
+                self.generate_question(token_doc, structure.sconj)
+
     def create(self, sentence):
         doc = self.parser(sentence)
         token_doc = doc.sentences[0].tokens
@@ -165,4 +223,4 @@ class QuestionGenerator:
 
 
 generator = QuestionGenerator()
-generator.create("Charles W. Eliot, president 1869-1909, removed Christianity from the school curriculum.")
+generator.create("Super Bowl 50 was played to see who would be the National Football League ( NFL ) champion.")

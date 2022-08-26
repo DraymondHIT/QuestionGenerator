@@ -46,6 +46,9 @@ class SentenceStructure:
         self.mod = PhraseStructure()
         self.loc = PhraseStructure()
         self.tmp = PhraseStructure()
+        self.prp = PhraseStructure()
+        self.prd = None
+        self.sconj = None
         self.analysize(doc, filtered)
         self.mods = self.get_mods()
 
@@ -53,9 +56,40 @@ class SentenceStructure:
         import re
         text1 = re.compile(r"B-ARG[0-9]$")
         text2 = re.compile(r"I-ARG[0-9]$")
-        filtered = filtered[-1]
+
+        if len(filtered) == 1:
+            main_structure = filtered[0]
+        else:
+            # find main structure(main verb)
+            main_structure = None
+            for result in filtered:
+                if list(doc)[result["tags"].index("B-V")].head == 0:
+                    main_structure = result
+
+            if main_structure is None:
+                min_O = 100
+                for result in filtered:
+                    if result["tags"].count("O") <= min_O:
+                        min_O = result["tags"].count("O")
+                        main_structure = result
+
+            # find possible secondary predication
+            if main_structure["tags"].count("B-ARGM-PRD") > 0:
+                secondary_verb = list(doc)[main_structure["tags"].index("B-ARGM-PRD")].text
+                for result in filtered:
+                    if result["verb"] == secondary_verb:
+                        self.prd = SentenceStructure(doc, [result])
+
+            # find possible sconj structure
+            verb_follow = list(doc)[main_structure["tags"].index("B-V")+1]
+            if verb_follow.upos == "SCONJ":
+                sconj_verb = list(doc)[verb_follow.head-1].text
+                for result in filtered:
+                    if result["verb"] == sconj_verb:
+                        self.sconj = SentenceStructure(doc, [result])
+
         for index, token in enumerate(doc):
-            temp = filtered["tags"][index]
+            temp = main_structure["tags"][index]
             if text1.match(temp):
                 if self.subject.isEmpty():
                     self.subject.right_add(token)
@@ -83,6 +117,8 @@ class SentenceStructure:
                 self.loc.right_add(token)
             elif temp.__contains__("TMP"):
                 self.tmp.right_add(token)
+            elif temp.__contains__("PRP"):
+                self.prp.right_add(token)
             elif temp == "O":
                 if token.upos == "AUX" and list(doc)[token.head-1].upos == "VERB":
                     self.mod.right_add(token)
@@ -97,6 +133,8 @@ class SentenceStructure:
             mods.append(self.loc)
         if not self.tmp.isEmpty():
             mods.append(self.tmp)
+        if not self.prp.isEmpty():
+            mods.append(self.prp)
         return mods
 
     def __str__(self):

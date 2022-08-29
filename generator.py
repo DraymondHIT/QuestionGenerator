@@ -32,6 +32,9 @@ class QuestionGenerator:
 
         return filtered
 
+    def delete_continuous_space(self, text):
+        return " ".join(text.split())
+
     def get_center_word(self, word_doc, subject):
         tokens = subject.getValue()
         limit = range(tokens[0].id, tokens[-1].id+1)
@@ -56,10 +59,16 @@ class QuestionGenerator:
                 return "What time"
             elif list(token_doc)[center.id - 1].ner.__contains__("LOC"):
                 return "What place"
+            elif list(token_doc)[center.id - 1].ner.__contains__("CARDINAL"):
+                return "How many"
+            elif list(token_doc)[center.id - 1].ner.__contains__("PERCENT"):
+                return "How much"
             else:
                 return "What"
-        else:
+        elif center.upos in {"ADJ", "ADV"}:
             return "How"
+        else:
+            return "What"
 
     def get_wh_word_in_tmp(self, tmp):
         for token in tmp.getValue():
@@ -81,7 +90,7 @@ class QuestionGenerator:
             return start.text.lower() + " " + _subject
 
     def generate_question(self, token_doc, structure):
-        questions = []
+        qas = []
         original_verb = structure.verb
         if not structure.mod.isEmpty():
             auxiliary = structure.mod
@@ -98,6 +107,7 @@ class QuestionGenerator:
                 else:
                     auxiliary = "does"
                 verb_lemma = structure.verb.lemma()
+        neg = structure.neg
 
         # 1. subject question
         if len(structure.mods) > 0:
@@ -107,9 +117,10 @@ class QuestionGenerator:
             _mod = ""
         wh_word = self.get_wh_word(structure.doc, token_doc, structure.subject)
         if structure.verb.xpos() in {"VBG", "VBN"}:
-            print(wh_word + " " + auxiliary.__str__() + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?")
+            question = wh_word + " " + auxiliary.__str__() + " " + neg.__str__() + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
         else:
-            print(wh_word + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?")
+            question = wh_word + " " + original_verb.__str__() + " " + neg.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
+        qas.append({"question": self.delete_continuous_space(question), "answer": structure.subject.__str__()})
 
         # 2. object question
         if not structure.object.isEmpty() and structure.sconj is None:
@@ -128,9 +139,10 @@ class QuestionGenerator:
                 # convert 'who' to 'whom'
                 if wh_word == "who":
                     wh_word = "whom"
-                print(prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + _mod + "?")
+                question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
             else:
-                print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + _mod + "?")
+                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": structure.object.__str__()})
 
         # 3. TMP question
         # Three main types: When, How long and How often
@@ -140,19 +152,22 @@ class QuestionGenerator:
         if not structure.tmp.isEmpty():
             wh_word = self.get_wh_word_in_tmp(structure.tmp)
             _subject = self.lower_when_QG(token_doc, structure.subject)
-            print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
+            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": structure.tmp.__str__()})
 
         # 4. LOC question
         if not structure.loc.isEmpty():
             wh_word = "Where"
             _subject = self.lower_when_QG(token_doc, structure.subject)
-            print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
+            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": structure.loc.__str__()})
 
         # 5. PRP(purpose) question
         if not structure.prp.isEmpty():
             wh_word = "For what purpose"
             _subject = self.lower_when_QG(token_doc, structure.subject)
-            print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?")
+            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": structure.prp.__str__()})
 
         # 6. PRD(secondary predication) question
         if structure.prd is not None and not structure.prd.object.isEmpty():
@@ -172,38 +187,41 @@ class QuestionGenerator:
                 # convert 'who' to 'whom'
                 if wh_word == "who":
                     wh_word = "whom"
-                print(prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + secondary_verb.__str__() + " " + _mod + "?")
+                question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
             else:
-                print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + secondary_verb.__str__() + " " + _mod + "?")
+                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": structure.prd.object.__str__()})
 
         # 7. SCONJ question
         if structure.sconj is not None:
             # incomplete structure
-            # When subject is lacking, real object will be stored as subject in SentenceStructure.
-            if structure.sconj.object.isEmpty():
+            if structure.sconj.subject.isEmpty():
                 sconj_verb = structure.sconj.verb.lemma()
                 if len(structure.sconj.mods) > 0:
                     mod = random.choice(structure.sconj.mods)
                     _mod = self.lower_when_QG(token_doc, mod)
                 else:
                     _mod = ""
-                wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.subject)
+                wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.object)
                 _subject = self.lower_when_QG(token_doc, structure.subject)
 
                 # if object starts with PREP
-                if structure.sconj.subject.getStart().upos == "ADP":
-                    prep = structure.sconj.subject.getStart().text.capitalize()
+                if structure.sconj.object.getStart().upos == "ADP":
+                    prep = structure.sconj.object.getStart().text.capitalize()
                     wh_word = wh_word.lower()
                     # convert 'who' to 'whom'
                     if wh_word == "who":
                         wh_word = "whom"
-                    print(prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + sconj_verb.__str__() + " " + _mod + "?")
+                    question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
                 else:
-                    print(wh_word + " " + auxiliary.__str__() + " " + _subject + " " + sconj_verb.__str__() + " " + _mod + "?")
+                    question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": structure.sconj.object.__str__()})
 
             # complete structure
             else:
-                self.generate_question(token_doc, structure.sconj)
+                qas.extend(self.generate_question(token_doc, structure.sconj))
+
+        return qas
 
     def create(self, sentence):
         doc = self.parser(sentence)
@@ -219,7 +237,8 @@ class QuestionGenerator:
         structure = SentenceStructure(word_doc, filtered_result)
         print(structure)
 
-        self.generate_question(token_doc, structure)
+        result = self.generate_question(token_doc, structure)
+        print(result)
 
 
 generator = QuestionGenerator()

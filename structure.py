@@ -79,24 +79,35 @@ class SentenceStructure:
                 for result in filtered:
                     if result["verb"] == secondary_verb:
                         self.prd = SentenceStructure(doc, [result])
+                filtered = filter(lambda x: x["verb"] != secondary_verb, filtered)
 
             # find possible sconj structure
-            verb_follow = list(doc)[main_structure["tags"].index("B-V")+1]
+            verb_follow_index = main_structure["tags"].index("B-V")+1
+            verb_follow = list(doc)[verb_follow_index]
+            verb_follow_tag = main_structure["tags"][verb_follow_index]
             if verb_follow.upos == "SCONJ":
                 sconj_verb = list(doc)[verb_follow.head-1].text
                 for result in filtered:
                     if result["verb"] == sconj_verb:
                         self.sconj = SentenceStructure(doc, [result])
+                        break
+                if self.sconj is None:
+                    for result in filtered:
+                        if result["tags"].index("B-V") > verb_follow_index and main_structure["tags"][result["tags"].index("B-V")] == "I"+verb_follow_tag[1:]:
+                            self.sconj = SentenceStructure(doc, [result])
+                            break
 
+        _verb = list(doc)[main_structure["tags"].index("B-V")]
         for index, token in enumerate(doc):
             temp = main_structure["tags"][index]
             if text1.match(temp):
-                if self.subject.isEmpty():
+                if self.subject.isEmpty() and index < _verb.id - 1:
                     self.subject.right_add(token)
-                elif self.object.isEmpty():
-                    self.object.right_add(token)
-                elif self.complement.isEmpty():
-                    self.complement.right_add(token)
+                if index > _verb.id - 1:
+                    if self.object.isEmpty():
+                        self.object.right_add(token)
+                    elif self.complement.isEmpty():
+                        self.complement.right_add(token)
             elif text2.match(temp):
                 assert not self.subject.isEmpty() or not self.object.isEmpty() or not self.complement.isEmpty()
                 if self.object.isEmpty():

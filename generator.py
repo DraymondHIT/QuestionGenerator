@@ -1,7 +1,7 @@
 import stanza
 from allennlp.predictors.predictor import Predictor
 import allennlp_models.tagging
-from structure import SentenceStructure
+from structure import SentenceStructure, PhraseStructure
 import random
 from collections import Counter
 
@@ -48,6 +48,26 @@ class QuestionGenerator:
         center_word = counts.most_common(1)[0][0]
 
         return center_word
+
+    def get_entity(self, word_doc, token_doc, subject):
+        center_token = self.get_center_word(word_doc, subject)
+        token_list = list(token_doc)
+        tag = token_list[center_token.id - 1].ner
+        if tag == "O":
+            return None
+        elif tag.startswith("S-"):
+            return center_token.text
+        else:
+            entity = PhraseStructure()
+            entity.right_add(center_token)
+            index1 = index2 = center_token.id - 1
+            while token_list[index1].ner != "B" + tag[1:] and index1 > 0:
+                index1 -= 1
+                entity.left_add(token_list[index1])
+            while token_list[index2].ner != "E" + tag[1:] and index2 < len(token_list) - 1:
+                index2 += 1
+                entity.right_add(token_list[index2])
+            return entity.__str__()
 
     def get_wh_word(self, word_doc, token_doc, subject):
 
@@ -110,39 +130,44 @@ class QuestionGenerator:
         neg = structure.neg
 
         # 1. subject question
-        if len(structure.mods) > 0:
-            mod = random.choice(structure.mods)
-            _mod = self.lower_when_QG(token_doc, mod)
-        else:
-            _mod = ""
-        wh_word = self.get_wh_word(structure.doc, token_doc, structure.subject)
-        if structure.verb.xpos() in {"VBG", "VBN"}:
-            question = wh_word + " " + auxiliary.__str__() + " " + neg.__str__() + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
-        else:
-            question = wh_word + " " + original_verb.__str__() + " " + neg.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
-        qas.append({"question": self.delete_continuous_space(question), "answer": structure.subject.__str__()})
-
-        # 2. object question
-        if not structure.object.isEmpty() and structure.sconj is None:
+        _answer = self.get_entity(structure.doc, token_doc, structure.subject)
+        if _answer is not None:
             if len(structure.mods) > 0:
                 mod = random.choice(structure.mods)
                 _mod = self.lower_when_QG(token_doc, mod)
             else:
                 _mod = ""
-            wh_word = self.get_wh_word(structure.doc, token_doc, structure.object)
-            _subject = self.lower_when_QG(token_doc, structure.subject)
+            wh_word = self.get_wh_word(structure.doc, token_doc, structure.subject)
 
-            # if object starts with PREP
-            if structure.object.getStart().upos == "ADP":
-                prep = structure.object.getStart().text.capitalize()
-                wh_word = wh_word.lower()
-                # convert 'who' to 'whom'
-                if wh_word == "who":
-                    wh_word = "whom"
-                question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
+            if structure.verb.xpos() in {"VBG", "VBN"}:
+                question = wh_word + " " + auxiliary.__str__() + " " + neg.__str__() + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
             else:
-                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
-            qas.append({"question": self.delete_continuous_space(question), "answer": structure.object.__str__()})
+                question = wh_word + " " + original_verb.__str__() + " " + neg.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
+            qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
+
+        # 2. object question
+        if not structure.object.isEmpty() and structure.sconj is None:
+            _answer = self.get_entity(structure.doc, token_doc, structure.object)
+            if _answer is not None:
+                if len(structure.mods) > 0:
+                    mod = random.choice(structure.mods)
+                    _mod = self.lower_when_QG(token_doc, mod)
+                else:
+                    _mod = ""
+                wh_word = self.get_wh_word(structure.doc, token_doc, structure.object)
+                _subject = self.lower_when_QG(token_doc, structure.subject)
+
+                # if object starts with PREP
+                if structure.object.getStart().upos == "ADP":
+                    prep = structure.object.getStart().text.capitalize()
+                    wh_word = wh_word.lower()
+                    # convert 'who' to 'whom'
+                    if wh_word == "who":
+                        wh_word = "whom"
+                    question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
+                else:
+                    question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + _mod + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
 
         # 3. TMP question
         # Three main types: When, How long and How often
@@ -150,72 +175,97 @@ class QuestionGenerator:
         # How long: for
         # How often: every, each
         if not structure.tmp.isEmpty():
-            wh_word = self.get_wh_word_in_tmp(structure.tmp)
-            _subject = self.lower_when_QG(token_doc, structure.subject)
-            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
-            qas.append({"question": self.delete_continuous_space(question), "answer": structure.tmp.__str__()})
+            # sometimes tmp is not a real tmp
+            center = self.get_center_word(structure.doc, structure.tmp)
+            if not list(token_doc)[center.id - 1].ner.__contains__("DATE"):
+                wh_word = self.get_wh_word(structure.doc, token_doc, structure.tmp)
+                _answer = self.get_entity(structure.doc, token_doc, structure.tmp)
+                _subject = self.lower_when_QG(token_doc, structure.subject)
+
+                # if object starts with PREP
+                if structure.tmp.getStart().upos == "ADP":
+                    prep = structure.tmp.getStart().text.capitalize()
+                    wh_word = wh_word.lower()
+                    # convert 'who' to 'whom'
+                    if wh_word == "who":
+                        wh_word = "whom"
+                    question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + "?"
+                else:
+                    question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
+            else:
+                wh_word = self.get_wh_word_in_tmp(structure.tmp)
+                _subject = self.lower_when_QG(token_doc, structure.subject)
+                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": structure.tmp.__str__()})
 
         # 4. LOC question
         if not structure.loc.isEmpty():
-            wh_word = "Where"
-            _subject = self.lower_when_QG(token_doc, structure.subject)
-            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
-            qas.append({"question": self.delete_continuous_space(question), "answer": structure.loc.__str__()})
+            _answer = self.get_entity(structure.doc, token_doc, structure.loc)
+            if _answer is not None:
+                wh_word = "Where"
+                _subject = self.lower_when_QG(token_doc, structure.subject)
+                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
 
         # 5. PRP(purpose) question
-        if not structure.prp.isEmpty():
-            wh_word = "For what purpose"
-            _subject = self.lower_when_QG(token_doc, structure.subject)
-            question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
-            qas.append({"question": self.delete_continuous_space(question), "answer": structure.prp.__str__()})
+        # if not structure.prp.isEmpty():
+        #     wh_word = "For what purpose"
+        #     _subject = self.lower_when_QG(token_doc, structure.subject)
+        #     question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + verb_lemma.__str__() + " " + structure.object.__str__() + "?"
+        #     qas.append({"question": self.delete_continuous_space(question), "answer": structure.prp.__str__()})
 
         # 6. PRD(secondary predication) question
         if structure.prd is not None and not structure.prd.object.isEmpty():
-            secondary_verb = structure.prd.verb.lemma()
-            if len(structure.prd.mods) > 0:
-                mod = random.choice(structure.prd.mods)
-                _mod = self.lower_when_QG(token_doc, mod)
-            else:
-                _mod = ""
-            wh_word = self.get_wh_word(structure.doc, token_doc, structure.prd.object)
-            _subject = self.lower_when_QG(token_doc, structure.subject if structure.prd.subject.isEmpty() else structure.prd.subject)
+            _answer = self.get_entity(structure.loc, token_doc, structure.prd.object)
+            if _answer is not None:
+                secondary_verb = structure.prd.verb.lemma()
+                if len(structure.prd.mods) > 0:
+                    mod = random.choice(structure.prd.mods)
+                    _mod = self.lower_when_QG(token_doc, mod)
+                else:
+                    _mod = ""
+                wh_word = self.get_wh_word(structure.doc, token_doc, structure.prd.object)
+                _subject = self.lower_when_QG(token_doc, structure.subject if structure.prd.subject.isEmpty() else structure.prd.subject)
 
-            # if object starts with PREP
-            if structure.prd.object.getStart().upos == "ADP":
-                prep = structure.prd.object.getStart().text.capitalize()
-                wh_word = wh_word.lower()
-                # convert 'who' to 'whom'
-                if wh_word == "who":
-                    wh_word = "whom"
-                question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
-            else:
-                question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
-            qas.append({"question": self.delete_continuous_space(question), "answer": structure.prd.object.__str__()})
+                # if object starts with PREP
+                if structure.prd.object.getStart().upos == "ADP":
+                    prep = structure.prd.object.getStart().text.capitalize()
+                    wh_word = wh_word.lower()
+                    # convert 'who' to 'whom'
+                    if wh_word == "who":
+                        wh_word = "whom"
+                    question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
+                else:
+                    question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + secondary_verb.__str__() + " " + _mod + "?"
+                qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
 
         # 7. SCONJ question
         if structure.sconj is not None:
             # incomplete structure
             if structure.sconj.subject.isEmpty():
-                sconj_verb = structure.sconj.verb.lemma()
-                if len(structure.sconj.mods) > 0:
-                    mod = random.choice(structure.sconj.mods)
-                    _mod = self.lower_when_QG(token_doc, mod)
-                else:
-                    _mod = ""
-                wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.object)
-                _subject = self.lower_when_QG(token_doc, structure.subject)
+                _answer = self.get_entity(structure.doc, token_doc, structure.sconj.object)
+                if _answer is not None:
+                    sconj_verb = structure.sconj.verb.lemma()
+                    if len(structure.sconj.mods) > 0:
+                        mod = random.choice(structure.sconj.mods)
+                        _mod = self.lower_when_QG(token_doc, mod)
+                    else:
+                        _mod = ""
+                    wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.object)
+                    _subject = self.lower_when_QG(token_doc, structure.subject)
 
-                # if object starts with PREP
-                if structure.sconj.object.getStart().upos == "ADP":
-                    prep = structure.sconj.object.getStart().text.capitalize()
-                    wh_word = wh_word.lower()
-                    # convert 'who' to 'whom'
-                    if wh_word == "who":
-                        wh_word = "whom"
-                    question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
-                else:
-                    question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
-                qas.append({"question": self.delete_continuous_space(question), "answer": structure.sconj.object.__str__()})
+                    # if object starts with PREP
+                    if structure.sconj.object.getStart().upos == "ADP":
+                        prep = structure.sconj.object.getStart().text.capitalize()
+                        wh_word = wh_word.lower()
+                        # convert 'who' to 'whom'
+                        if wh_word == "who":
+                            wh_word = "whom"
+                        question = prep + " " + wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
+                    else:
+                        question = wh_word + " " + auxiliary.__str__() + " " + _subject + " " + neg.__str__() + " " + sconj_verb.__str__() + " " + _mod + "?"
+                    qas.append({"question": self.delete_continuous_space(question), "answer": _answer})
 
             # complete structure
             else:

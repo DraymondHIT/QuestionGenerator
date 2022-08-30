@@ -35,7 +35,7 @@ class QuestionGenerator:
     def delete_continuous_space(self, text):
         return " ".join(text.split())
 
-    def get_center_word(self, word_doc, subject):
+    def get_center_word(self, word_doc, token_doc, dependency_doc, subject):
         tokens = subject.getValue()
         limit = range(tokens[0].id, tokens[-1].id+1)
         center_words = []
@@ -47,10 +47,14 @@ class QuestionGenerator:
         counts = Counter(center_words)
         center_word = counts.most_common(1)[0][0]
 
+        # find possible apposition
+        for word1, deprel, word2 in dependency_doc:
+            if deprel == "appos" and word1.__dict__ == center_word.__dict__ and list(token_doc)[word2.id - 1].ner != "O":
+                return word2
+
         return center_word
 
-    def get_entity(self, word_doc, token_doc, subject):
-        center_token = self.get_center_word(word_doc, subject)
+    def get_entity(self, token_doc, center_token):
         token_list = list(token_doc)
         tag = token_list[center_token.id - 1].ner
         if tag == "O":
@@ -69,23 +73,22 @@ class QuestionGenerator:
                 entity.right_add(token_list[index2])
             return entity.__str__()
 
-    def get_wh_word(self, word_doc, token_doc, subject):
+    def get_wh_word(self, token_doc, center_token):
 
-        center = self.get_center_word(word_doc, subject)
-        if center.upos in {"NOUN", "PROPN", "NUM"}:
-            if list(token_doc)[center.id - 1].ner.__contains__("PERSON"):
+        if center_token.upos in {"NOUN", "PROPN", "NUM"}:
+            if list(token_doc)[center_token.id - 1].ner.__contains__("PERSON"):
                 return "Who"
-            elif list(token_doc)[center.id - 1].ner.__contains__("DATE"):
+            elif list(token_doc)[center_token.id - 1].ner.__contains__("DATE"):
                 return "What time"
-            elif list(token_doc)[center.id - 1].ner.__contains__("LOC"):
+            elif list(token_doc)[center_token.id - 1].ner.__contains__("LOC"):
                 return "What place"
-            elif list(token_doc)[center.id - 1].ner.__contains__("CARDINAL"):
+            elif list(token_doc)[center_token.id - 1].ner.__contains__("CARDINAL"):
                 return "How many"
-            elif list(token_doc)[center.id - 1].ner.__contains__("PERCENT"):
+            elif list(token_doc)[center_token.id - 1].ner.__contains__("PERCENT"):
                 return "How much"
             else:
                 return "What"
-        elif center.upos in {"ADJ", "ADV"}:
+        elif center_token.upos in {"ADJ", "ADV"}:
             return "How"
         else:
             return "What"
@@ -109,7 +112,7 @@ class QuestionGenerator:
             _subject = " ".join(_subject)
             return start.text.lower() + " " + _subject
 
-    def generate_question(self, token_doc, structure):
+    def generate_question(self, structure, token_doc, dependency_doc):
         qas = []
         original_verb = structure.verb
         if not structure.mod.isEmpty():
@@ -130,14 +133,15 @@ class QuestionGenerator:
         neg = structure.neg
 
         # 1. subject question
-        _answer = self.get_entity(structure.doc, token_doc, structure.subject)
+        _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.subject)
+        _answer = self.get_entity(token_doc, _center_token)
         if _answer is not None:
             if len(structure.mods) > 0:
                 mod = random.choice(structure.mods)
                 _mod = self.lower_when_QG(token_doc, mod)
             else:
                 _mod = ""
-            wh_word = self.get_wh_word(structure.doc, token_doc, structure.subject)
+            wh_word = self.get_wh_word(token_doc, _center_token)
 
             if structure.verb.xpos() in {"VBG", "VBN"}:
                 question = wh_word + " " + auxiliary.__str__() + " " + neg.__str__() + " " + original_verb.__str__() + " " + structure.object.__str__() + " " + _mod + "?"
@@ -147,14 +151,15 @@ class QuestionGenerator:
 
         # 2. object question
         if not structure.object.isEmpty() and structure.sconj is None:
-            _answer = self.get_entity(structure.doc, token_doc, structure.object)
+            _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.object)
+            _answer = self.get_entity(token_doc, _center_token)
             if _answer is not None:
                 if len(structure.mods) > 0:
                     mod = random.choice(structure.mods)
                     _mod = self.lower_when_QG(token_doc, mod)
                 else:
                     _mod = ""
-                wh_word = self.get_wh_word(structure.doc, token_doc, structure.object)
+                wh_word = self.get_wh_word(token_doc, _center_token)
                 _subject = self.lower_when_QG(token_doc, structure.subject)
 
                 # if object starts with PREP
@@ -176,10 +181,11 @@ class QuestionGenerator:
         # How often: every, each
         if not structure.tmp.isEmpty():
             # sometimes tmp is not a real tmp
-            center = self.get_center_word(structure.doc, structure.tmp)
+            center = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.tmp)
             if not list(token_doc)[center.id - 1].ner.__contains__("DATE"):
-                wh_word = self.get_wh_word(structure.doc, token_doc, structure.tmp)
-                _answer = self.get_entity(structure.doc, token_doc, structure.tmp)
+                _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.tmp)
+                wh_word = self.get_wh_word(token_doc, _center_token)
+                _answer = self.get_entity(token_doc, _center_token)
                 _subject = self.lower_when_QG(token_doc, structure.subject)
 
                 # if object starts with PREP
@@ -201,7 +207,8 @@ class QuestionGenerator:
 
         # 4. LOC question
         if not structure.loc.isEmpty():
-            _answer = self.get_entity(structure.doc, token_doc, structure.loc)
+            _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.loc)
+            _answer = self.get_entity(token_doc, _center_token)
             if _answer is not None:
                 wh_word = "Where"
                 _subject = self.lower_when_QG(token_doc, structure.subject)
@@ -217,7 +224,8 @@ class QuestionGenerator:
 
         # 6. PRD(secondary predication) question
         if structure.prd is not None and not structure.prd.object.isEmpty():
-            _answer = self.get_entity(structure.loc, token_doc, structure.prd.object)
+            _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.prd.object)
+            _answer = self.get_entity(token_doc, _center_token)
             if _answer is not None:
                 secondary_verb = structure.prd.verb.lemma()
                 if len(structure.prd.mods) > 0:
@@ -225,7 +233,7 @@ class QuestionGenerator:
                     _mod = self.lower_when_QG(token_doc, mod)
                 else:
                     _mod = ""
-                wh_word = self.get_wh_word(structure.doc, token_doc, structure.prd.object)
+                wh_word = self.get_wh_word(token_doc, _center_token)
                 _subject = self.lower_when_QG(token_doc, structure.subject if structure.prd.subject.isEmpty() else structure.prd.subject)
 
                 # if object starts with PREP
@@ -244,7 +252,8 @@ class QuestionGenerator:
         if structure.sconj is not None:
             # incomplete structure
             if structure.sconj.subject.isEmpty():
-                _answer = self.get_entity(structure.doc, token_doc, structure.sconj.object)
+                _center_token = self.get_center_word(structure.doc, token_doc, dependency_doc, structure.sconj.object)
+                _answer = self.get_entity(token_doc, _center_token)
                 if _answer is not None:
                     sconj_verb = structure.sconj.verb.lemma()
                     if len(structure.sconj.mods) > 0:
@@ -252,7 +261,7 @@ class QuestionGenerator:
                         _mod = self.lower_when_QG(token_doc, mod)
                     else:
                         _mod = ""
-                    wh_word = self.get_wh_word(structure.doc, token_doc, structure.sconj.object)
+                    wh_word = self.get_wh_word(token_doc, _center_token)
                     _subject = self.lower_when_QG(token_doc, structure.subject)
 
                     # if object starts with PREP
@@ -269,27 +278,31 @@ class QuestionGenerator:
 
             # complete structure
             else:
-                qas.extend(self.generate_question(token_doc, structure.sconj))
+                qas.extend(self.generate_question(structure.sconj, token_doc, dependency_doc))
 
         return qas
 
-    def create(self, sentence):
-        doc = self.parser(sentence)
-        token_doc = doc.sentences[0].tokens
-        word_doc = doc.sentences[0].words
-        openie_result = self.openie.predict(sentence=sentence)
+    def create(self, sentences):
+        for sentence in sentences:
+            print("---------------------------------------")
+            print(f"text: {sentence}")
+            doc = self.parser(sentence)
+            token_doc = doc.sentences[0].tokens
+            word_doc = doc.sentences[0].words
+            dependency_doc = doc.sentences[0].dependencies
+            openie_result = self.openie.predict(sentence=sentence)
 
-        # filter some bad results
-        filtered_result = self.filter_from_openie_result(word_doc, openie_result)
-        print(filtered_result)
+            # filter some bad results
+            filtered_result = self.filter_from_openie_result(word_doc, openie_result)
+            print(filtered_result)
 
-        # break up sentences into many elements
-        structure = SentenceStructure(word_doc, filtered_result)
-        print(structure)
+            # break up sentences into many elements
+            structure = SentenceStructure(word_doc, filtered_result)
+            print(structure)
 
-        result = self.generate_question(token_doc, structure)
-        print(result)
+            result = self.generate_question(structure, token_doc, dependency_doc)
+            print(result)
 
 
 generator = QuestionGenerator()
-generator.create("Super Bowl 50 was played to see who would be the National Football League ( NFL ) champion.")
+generator.create(["Super Bowl 50 was played to see who would be the National Football League ( NFL ) champion."])
